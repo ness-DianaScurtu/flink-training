@@ -100,7 +100,7 @@ public class LongRidesExercise {
     @VisibleForTesting
     public static class AlertFunction extends KeyedProcessFunction<Long, TaxiRide, Long> {
 
-        private final int TWO_HOURS = 2 * 60 * 60;
+        private static final int TWO_HOURS = 2 * 60 * 60;
 
         private transient ValueState<TaxiRide> rideState;
 
