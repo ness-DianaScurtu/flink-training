@@ -19,6 +19,8 @@
 package org.apache.flink.training.exercises.ridesandfares;
 
 import org.apache.flink.api.common.JobExecutionResult;
+import org.apache.flink.api.common.state.ValueState;
+import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -31,7 +33,6 @@ import org.apache.flink.training.exercises.common.datatypes.TaxiFare;
 import org.apache.flink.training.exercises.common.datatypes.TaxiRide;
 import org.apache.flink.training.exercises.common.sources.TaxiFareGenerator;
 import org.apache.flink.training.exercises.common.sources.TaxiRideGenerator;
-import org.apache.flink.training.exercises.common.utils.MissingSolutionException;
 import org.apache.flink.util.Collector;
 
 /**
@@ -42,7 +43,9 @@ import org.apache.flink.util.Collector;
 public class RidesAndFaresExercise {
 
     private final SourceFunction<TaxiRide> rideSource;
+
     private final SourceFunction<TaxiFare> fareSource;
+
     private final SinkFunction<RideAndFare> sink;
 
     /** Creates a job using the sources and sink provided. */
@@ -59,8 +62,9 @@ public class RidesAndFaresExercise {
     /**
      * Creates and executes the pipeline using the StreamExecutionEnvironment provided.
      *
-     * @throws Exception which occurs during job execution.
      * @return {JobExecutionResult}
+     * @throws Exception
+     *         which occurs during job execution.
      */
     public JobExecutionResult execute() throws Exception {
 
@@ -74,7 +78,10 @@ public class RidesAndFaresExercise {
         DataStream<TaxiFare> fares = env.addSource(fareSource).keyBy(fare -> fare.rideId);
 
         // Create the pipeline.
-        rides.connect(fares).flatMap(new EnrichmentFunction()).addSink(sink);
+        rides
+                .connect(fares)
+                .flatMap(new EnrichmentFunction())
+                .addSink(sink);
 
         // Execute the pipeline and return the result.
         return env.execute("Join Rides with Fares");
@@ -83,7 +90,8 @@ public class RidesAndFaresExercise {
     /**
      * Main method.
      *
-     * @throws Exception which occurs during job execution.
+     * @throws Exception
+     *         which occurs during job execution.
      */
     public static void main(String[] args) throws Exception {
 
@@ -96,22 +104,46 @@ public class RidesAndFaresExercise {
         job.execute();
     }
 
-    public static class EnrichmentFunction
-            extends RichCoFlatMapFunction<TaxiRide, TaxiFare, RideAndFare> {
+    public static class EnrichmentFunction extends RichCoFlatMapFunction<TaxiRide, TaxiFare, RideAndFare> {
+
+        private ValueState<TaxiRide> rideState;
+
+        private ValueState<TaxiFare> fareState;
 
         @Override
-        public void open(Configuration config) throws Exception {
-            throw new MissingSolutionException();
+        public void open(Configuration config) {
+
+            rideState =
+                    getRuntimeContext()
+                            .getState(new ValueStateDescriptor<>("ride_state", TaxiRide.class));
+            fareState =
+                    getRuntimeContext()
+                            .getState(new ValueStateDescriptor<>("fare_state", TaxiFare.class));
         }
 
         @Override
         public void flatMap1(TaxiRide ride, Collector<RideAndFare> out) throws Exception {
-            throw new MissingSolutionException();
+            TaxiFare fare = fareState.value();
+            updateStateAndEmit(ride, fare, out);
         }
 
         @Override
         public void flatMap2(TaxiFare fare, Collector<RideAndFare> out) throws Exception {
-            throw new MissingSolutionException();
+            TaxiRide ride = rideState.value();
+            updateStateAndEmit(ride, fare, out);
+        }
+
+        private void updateStateAndEmit(TaxiRide ride, TaxiFare fare, Collector<RideAndFare> out) throws Exception {
+            if (ride != null && fare != null) {
+                rideState.clear();
+                fareState.clear();
+                out.collect(new RideAndFare(ride, fare));
+            } else if (ride != null) {
+                rideState.update(ride);
+            } else if (fare != null) {
+                fareState.update(fare);
+            }
         }
     }
+
 }
