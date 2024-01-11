@@ -21,6 +21,8 @@ package org.apache.flink.training.exercises.longrides;
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.JobExecutionResult;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.api.common.state.ValueState;
+import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -98,17 +100,70 @@ public class LongRidesExercise {
     @VisibleForTesting
     public static class AlertFunction extends KeyedProcessFunction<Long, TaxiRide, Long> {
 
+        private static final int TWO_HOURS = 2 * 60 * 60;
+
+        private transient ValueState<TaxiRide> rideState;
+
         @Override
         public void open(Configuration config) throws Exception {
-            throw new MissingSolutionException();
+            ValueStateDescriptor<TaxiRide> rideStateDesc = new ValueStateDescriptor<>("ride-state", TaxiRide.class);
+            rideState = getRuntimeContext().getState(rideStateDesc);
         }
 
         @Override
-        public void processElement(TaxiRide ride, Context context, Collector<Long> out)
-                throws Exception {}
+        public void processElement(TaxiRide currentRide, Context context, Collector<Long> out) throws Exception {
+            TaxiRide prevRide = rideState.value();
+
+            // Method 1
+            if (prevRide == null) { // we have a first event for this ride
+
+                if (currentRide.isStart) { // that is a START event
+                    Long twoHoursLater = addSeconds(currentRide, TWO_HOURS);
+                    context.timerService().registerEventTimeTimer(twoHoursLater);
+                } else {
+                    // it's an END Event
+                }
+
+                rideState.update(currentRide);
+            } else { // it's not the first event for ride
+
+                if (currentRide.isStart) {
+                    // but this one is a START event
+                    if (rideTooLong(currentRide, prevRide)) {
+                        out.collect(currentRide.rideId);
+                    }
+                } else { // END event
+                    Long twoHoursLater = addSeconds(prevRide, TWO_HOURS);
+                    context.timerService().deleteEventTimeTimer(twoHoursLater);
+
+                    if (rideTooLong(prevRide, currentRide)) {
+                        out.collect(currentRide.rideId);
+                    }
+                }
+
+                rideState.clear();
+            }
+
+        }
+
+        private Long addSeconds(TaxiRide currentRide, Integer seconds) {
+            return currentRide.eventTime.plusSeconds(seconds).toEpochMilli();
+        }
+
+        private boolean rideTooLong(TaxiRide startEvent, TaxiRide endEvent) {
+            return Duration.between(startEvent.eventTime, endEvent.eventTime)
+                    .compareTo(Duration.ofHours(2))
+                    > 0;
+        }
 
         @Override
-        public void onTimer(long timestamp, OnTimerContext context, Collector<Long> out)
-                throws Exception {}
+        public void onTimer(long timestamp, OnTimerContext context, Collector<Long> out) throws Exception {
+            TaxiRide currentRide = rideState.value();
+
+            if (currentRide != null) {
+                out.collect(currentRide.rideId);
+                rideState.clear();
+            }
+        }
     }
 }
